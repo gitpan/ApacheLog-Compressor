@@ -11,7 +11,7 @@ use URI::Escape qw(uri_unescape);
 use DateTime;
 use Encode qw(encode_utf8 decode_utf8);
 
-our $VERSION = '0.002';
+our $VERSION = '0.003';
 
 =head1 NAME
 
@@ -19,7 +19,7 @@ ApacheLog::Compressor - convert Apache / CLF log files into a binary format for 
 
 =head1 VERSION
 
-version 0.002
+version 0.003
 
 =head1 SYNOPSIS
 
@@ -260,6 +260,9 @@ sub update_mapping {
 		if(exists $v->{process_in}) {
 			push @{$self->{log_process}}, $v->{process_in};
 		}
+		if(exists $v->{process_out}) {
+			push @{$self->{log_process_out}}, $v->{process_out};
+		}
 
 		my $type = $v->{type};
 		next ITEM unless $type;
@@ -331,6 +334,8 @@ sub set_key {
 	my $v = $args{data};
 	$self->{entry_cache}->{$type}->{$v} = $args{id};
 	$self->{entry_index}->{$type}->[$args{id}] = $v;
+	$self->{"on_set_$type"}->($self, $args{id}, $v) if $self->{"on_set_$type"};
+	$self->{"on_set_key"}->($self, $type, $args{id}, $v) if $self->{on_set_key};
 	return $self;
 }
 
@@ -495,6 +500,7 @@ sub handle_log {
 
 	my %data;
 	@data{@{ $self->{format_keys} }} = unpack($self->{log_format}, $$pkt);
+	$_->($self, \%data) for @{$self->{log_process_out}};
 
 	die "No timestamp" unless $self->{timestamp};
 	$self->{on_log_line}->($self, \%data) if exists $self->{on_log_line};
@@ -509,13 +515,13 @@ sub data_to_text {
 	return join(' ',
 		$self->from_cache('host', $data->{host}),
 		$data->{duration},
-		inet_ntoa(pack('N1', $data->{ip})),
+		$data->{ip},
 		'-',
 		$self->from_cache('user', $data->{user}),
 		'[' . DateTime->from_epoch(epoch => $self->{timestamp})->strftime("%d/%b/%Y:%H:%M:%S %z") . ']',
-		'"' . $HTTP_METHOD_LIST[$data->{method}] . ' ' . $self->from_cache('url', $data->{url}) . (length $q ? "?$q" : "") . ' HTTP/' . ($data->{ver} ? '1.1' : '1.0') . '"',
+		'"' . $data->{method} . ' ' . $self->from_cache('url', $data->{url}) . (length $q ? "?$q" : "") . ' HTTP/' . ($data->{ver} ? '1.1' : '1.0') . '"',
 		$data->{result},
-		($data->{size} == 4294967295 ? '-' : $data->{size}),
+		$data->{size},
 		'"' . $self->from_cache('useragent', $data->{useragent}) . '"',
 		'"' . $self->from_cache('refer', $data->{refer}) . '"',
 	);
@@ -534,8 +540,10 @@ sub handle_timestamp {
 	my $pkt = shift;
 	return unless length $$pkt >= 5;
 	my ($type, $hostname) = unpack('C1N1', $$pkt);
-	substr $$pkt, 0, 5, '';
 	$self->{timestamp} = $hostname;
+	warn "Zero timestamp?" unless $self->{timestamp};
+	substr $$pkt, 0, 5, '';
+	$self;
 }
 
 sub stats {

@@ -1,3 +1,7 @@
+0.003     2011-02-20 18:20:53 Europe/London
+	Improve filtering support, basic callbacks for things that need to know when new URL packets etc. are seen,
+	 and apply post processing before sending the log line event.
+
 0.002     2011-02-20 04:28:50 Europe/London
 	Handle partial incoming data streams for expanding, and avoid sending timestamp
 	 for filtered entries.

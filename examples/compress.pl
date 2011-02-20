@@ -2,7 +2,7 @@
 use strict;
 use warnings;
 
-use ApacheLog::Compressor;
+use ApacheLog::Compressor 0.003;
 use Sys::Hostname qw(hostname);
 
 # Write all data to bzip2-compressed output file
@@ -17,6 +17,8 @@ my $alc = ApacheLog::Compressor->new(
 	},
 	filter => sub {
 		my ($self, $data) = @_;
+		return 0 unless length $data->{url};
+		return 0 unless $data->{timestamp};
 		return 0 if $ApacheLog::Compressor::HTTP_METHOD_LIST[$data->{method}] eq 'OPTIONS' && $data->{url} eq '*';
 		return 1;
 	}
