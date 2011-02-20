@@ -11,7 +11,7 @@ use URI::Escape qw(uri_unescape);
 use DateTime;
 use Encode qw(encode_utf8 decode_utf8);
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 
 =head1 NAME
 
@@ -19,7 +19,7 @@ ApacheLog::Compressor - convert Apache / CLF log files into a binary format for 
 
 =head1 VERSION
 
-version 0.001
+version 0.002
 
 =head1 SYNOPSIS
 
@@ -186,10 +186,6 @@ sub new {
 			timestamp	=> { id => 0x02, regex => qr{\[([^\]]+)\]}, process_in => sub {
 				my ($self, $data) = @_;
 				$data->{timestamp} = str2time($data->{timestamp});
-				if(!defined($self->{timestamp}) || $data->{timestamp} != $self->{timestamp}) {
-					$self->{timestamp} = $data->{timestamp};
-					$self->send_packet('timestamp', timestamp => $self->{timestamp});
-				}
 			} },
 			method		=> { type => 'C1', regex => qr{"([^ ]+)}, process_in => sub {
 				my ($self, $data) = @_;
@@ -351,7 +347,12 @@ sub compress {
 	@data{@{$self->{log_regex_keys}}} = $txt =~ m!$self->{log_regex}!;
 	$data{type} = 0;
 	$_->($self, \%data) for @{$self->{log_process}};
-	return if exists($self->{filter}) && !$self->{filter}->(\%data);
+	return if exists($self->{filter}) && !$self->{filter}->($self, \%data);
+
+	if(!defined($self->{timestamp}) || $data{timestamp} != $self->{timestamp}) {
+		$self->{timestamp} = $data{timestamp};
+		$self->send_packet('timestamp', timestamp => $self->{timestamp});
+	}
 
 	my @fmt = @{$self->{format}};
 	my @data;
@@ -458,6 +459,8 @@ sub expand {
 	my $method = 'handle_' . $self->{packet_handler}->{$type};
 	return $self->$method($pkt) if $self->can($method);
 
+	return unless index($$pkt, "\0", 5) >= 0;
+
 	(undef, my $id, my $data) = unpack('C1N1Z*', $$pkt);
 	substr $$pkt, 0, 6 + length($data), '';
 	$self->set_key($self->{packet_handler}->{$type}, data => $data, id => $id);
@@ -488,6 +491,8 @@ Handle an incoming log packet.
 sub handle_log {
 	my $self = shift;
 	my $pkt = shift;
+	return unless length $$pkt >= $self->{log_record_length};
+
 	my %data;
 	@data{@{ $self->{format_keys} }} = unpack($self->{log_format}, $$pkt);
 
@@ -519,6 +524,7 @@ sub data_to_text {
 sub handle_server {
 	my $self = shift;
 	my $pkt = shift;
+	return unless index($$pkt, "\0", 1) >= 0;
 	my ($type, $hostname) = unpack('C1Z*', $$pkt);
 	substr $$pkt, 0, 2 + length($hostname), '';
 }
@@ -526,6 +532,7 @@ sub handle_server {
 sub handle_timestamp {
 	my $self = shift;
 	my $pkt = shift;
+	return unless length $$pkt >= 5;
 	my ($type, $hostname) = unpack('C1N1', $$pkt);
 	substr $$pkt, 0, 5, '';
 	$self->{timestamp} = $hostname;

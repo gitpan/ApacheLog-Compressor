@@ -1,3 +1,7 @@
+0.002     2011-02-20 04:28:50 Europe/London
+	Handle partial incoming data streams for expanding, and avoid sending timestamp
+	 for filtered entries.
+
 0.001     2011-02-20 01:12:14 Europe/London
 	Initial CPAN upload
 
