@@ -2,18 +2,18 @@
 use strict;
 use warnings;
 
+BEGIN { require 5.008; }
 
-
-use ExtUtils::MakeMaker 6.31;
+use ExtUtils::MakeMaker 6.30;
 
 
 
 my %WriteMakefileArgs = (
   'ABSTRACT' => 'Convert Apache/CLF data to binary format',
-  'AUTHOR' => 'Tom Molesworth <tom@entitymodel.com>',
+  'AUTHOR' => 'Tom Molesworth <cpan@entitymodel.com>',
   'BUILD_REQUIRES' => {},
   'CONFIGURE_REQUIRES' => {
-    'ExtUtils::MakeMaker' => '6.31'
+    'ExtUtils::MakeMaker' => '6.30'
   },
   'DISTNAME' => 'ApacheLog-Compressor',
   'EXE_FILES' => [],
@@ -28,7 +28,7 @@ my %WriteMakefileArgs = (
     'URI' => '0',
     'URI::Escape' => '0'
   },
-  'VERSION' => '0.003',
+  'VERSION' => '0.004',
   'test' => {
     'TESTS' => 't/*.t'
   }

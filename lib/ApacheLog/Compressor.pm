@@ -9,9 +9,10 @@ use List::Util qw(min);
 use URI;
 use URI::Escape qw(uri_unescape);
 use DateTime;
-use Encode qw(encode_utf8 decode_utf8);
+use Encode qw(encode_utf8 decode_utf8 FB_DEFAULT is_utf8 FB_CROAK);
+use POSIX qw{strftime};
 
-our $VERSION = '0.003';
+our $VERSION = '0.004';
 
 =head1 NAME
 
@@ -19,7 +20,7 @@ ApacheLog::Compressor - convert Apache / CLF log files into a binary format for 
 
 =head1 VERSION
 
-version 0.003
+version 0.004
 
 =head1 SYNOPSIS
 
@@ -76,12 +77,19 @@ any information. The vhost, user and URL are extracted to separate packets, sinc
 
 This would be converted to:
 
- vhost packet - api.example.com assigned index 0
- user packet - apiuser@example.com assigned index 0
- url packet - /api/status.json assigned index 0
- timestamp packet - since a busy server is likely to have several requests a second, there's a tiny saving to be had by sending this only
-  when the value changes, so we push this into a separate packet as well.
- log packet - actual data, binary encoded.
+=over 4
+
+=item * vhost packet - api.example.com assigned index 0
+
+=item * user packet - apiuser@example.com assigned index 0
+
+=item * url packet - /api/status.json assigned index 0
+
+=item * timestamp packet - since a busy server is likely to have several requests a second, there's a tiny saving to be had by sending this only when the value changes, so we push this into a separate packet as well.
+
+=item * log packet - actual data, binary encoded.
+
+=back
 
 The following packet types are available:
 
@@ -146,7 +154,7 @@ our @HTTP_METHOD_LIST = qw(GET PUT HEAD POST OPTIONS DELETE TRACE CONNECT MKCOL 
 
 =cut
 
-=head2 C<new>
+=head2 new
 
 Instantiate the class.
 
@@ -173,7 +181,7 @@ sub new {
 		server		=> undef,
 		format		=> [
 			type		=> { type => 'C1' },
-			host		=> { id => 0x03, type => 'n1', regex => qr{([^ ]+)} },
+			vhost		=> { id => 0x03, type => 'n1', regex => qr{([^ ]+)} },
 			duration	=> { type => 'N1', regex => qr{(\d+)} },
 			ip		=> { type => 'N1', regex => qr{(\S+)\s+\S+}, process_in => sub {
 				my ($self, $data) = @_;
@@ -196,8 +204,23 @@ sub new {
 			} },
 			url		=> { id => 0x07, type => 'N1', regex => qr{([^ ]+)}, process_in => sub {
 				my ($self, $data) = @_;
+				return $data->{url} = '' unless defined $data->{url};
+
 				($data->{url}, $data->{query}) = split /\?/, $data->{url}, 2;
-				$data->{url} = uri_unescape($data->{url}) if length $data->{url};
+# Dodgy UTF8 handling, currently disabled
+#				if(length $data->{url}) {
+					# URI::Escape's uri_unescape but in byte mode so we can check utf8 decoding manually
+#					my $txt = $data->{url};
+#					$txt = encode_utf8($txt); # turn OFF utf8
+#					$txt =~ s/%([0-9A-Fa-f]{2})/pack("C1", hex($1))/ge; # expand
+#					$txt = decode_utf8($txt); # turn ON utf8 where applicable
+#					$data->{url} = $txt;
+#				}
+#				if(defined $data->{query} && length $data->{query}) {
+					# URI::Escape's uri_unescape but in byte mode so we can check utf8 decoding manually
+#					(my $txt = $data->{query}) =~ s/%([0-9A-Fa-f]{2})/pack("C1", hex($1))/eg;
+#					$data->{query} = decode_utf8($txt, FB_DEFAULT);
+#				}
 			} },
 			query		=> { id => 0x0A, type => 'N1', },
 			ver		=> { type => 'C1', regex => qr{HTTP/(\d+\.\d+)"}, process_in => sub {
@@ -224,7 +247,7 @@ sub new {
 	return $self;
 }
 
-=head2 C<update_mapping>
+=head2 update_mapping
 
 Refresh the mapping from format keys and internal definitions.
 
@@ -289,7 +312,7 @@ sub update_mapping {
 	return $self;
 }
 
-=head2 C<cached>
+=head2 cached
 
 Returns the index for the given type and value, generating a packet if no previous value was found.
 
@@ -302,13 +325,14 @@ sub cached {
 	my $id = $self->{entry_cache}->{$type}->{$v};
 	unless(defined $id) {
 		push @{ $self->{entry_index}->{$type} }, $v;
+		++$self->{entry_count}->{$type};
 		$id = $self->{entry_cache}->{$type}->{$v} = scalar(@{ $self->{entry_index}->{$type} }) - 1;
-		$self->send_packet($type, id => $id, data => $v);
+		$self->send_packet($type, id => $id, data => encode_utf8($v));
 	}
 	return $id;
 }
 
-=head2 C<from_cache>
+=head2 from_cache
 
 Read a value from the cache, for expanding compressed log format entries.
 
@@ -321,7 +345,7 @@ sub from_cache {
 	return $self->{entry_index}->{$type}->[$id];
 }
 
-=head2 C<set_key>
+=head2 set_key
 
 Set a cache index key to a value when expanding a packet stream.
 
@@ -331,7 +355,7 @@ sub set_key {
 	my $self = shift;
 	my $type = shift;
 	my %args = @_;
-	my $v = $args{data};
+	my $v = decode_utf8($args{data});
 	$self->{entry_cache}->{$type}->{$v} = $args{id};
 	$self->{entry_index}->{$type}->[$args{id}] = $v;
 	$self->{"on_set_$type"}->($self, $args{id}, $v) if $self->{"on_set_$type"};
@@ -339,7 +363,7 @@ sub set_key {
 	return $self;
 }
 
-=head2 C<compress>
+=head2 compress
 
 General compression function. Given a line of data, sends packets as required to transmit that information.
 
@@ -349,7 +373,8 @@ sub compress {
 	my $self = shift;
 	my $txt = shift;
 	my %data;
-	@data{@{$self->{log_regex_keys}}} = $txt =~ m!$self->{log_regex}!;
+	@data{@{$self->{log_regex_keys}}} = $txt =~ m!$self->{log_regex}!
+		or return $self->invoke_event(bad_data => $txt);
 	$data{type} = 0;
 	$_->($self, \%data) for @{$self->{log_process}};
 	return if exists($self->{filter}) && !$self->{filter}->($self, \%data);
@@ -379,7 +404,7 @@ sub compress {
 	return $self;
 }
 
-=head2 C<send_packet>
+=head2 send_packet
 
 Generate and send a packet for the given type.
 
@@ -398,7 +423,7 @@ sub send_packet {
 	return $self->write_packet(pack('C1N1Z*', $self->{format_hash}->{$type}->{id}, $args{id}, $args{data}));
 }
 
-=head2 C<packet_reset>
+=head2 packet_reset
 
 Generate a reset packet and clear internal caches in the process.
 
@@ -411,7 +436,7 @@ sub packet_reset {
 	return pack('C1', 0x80);
 }
 
-=head2 C<packet_server>
+=head2 packet_server
 
 Generate a server packet.
 
@@ -423,7 +448,7 @@ sub packet_server {
 	return pack('C1Z*', 1, $args{hostname});
 }
 
-=head2 C<packet_timestamp>
+=head2 packet_timestamp
 
 Generate the timestamp packet.
 
@@ -435,7 +460,7 @@ sub packet_timestamp {
 	return pack('C1N1', 2, $args{timestamp});
 }
 
-=head2 C<write_packet>
+=head2 write_packet
 
 Write a packet to the output handler.
 
@@ -447,7 +472,7 @@ sub write_packet {
 	return $self;
 }
 
-=head2 C<expand>
+=head2 expand
 
 Expand incoming data.
 
@@ -471,7 +496,7 @@ sub expand {
 	$self->set_key($self->{packet_handler}->{$type}, data => $data, id => $id);
 }
 
-=head2 C<handle_reset>
+=head2 handle_reset
 
 Handle an incoming reset packet.
 
@@ -487,7 +512,7 @@ sub handle_reset {
 	substr $$pkt, 0, 1, '';
 }
 
-=head2 C<handle_log>
+=head2 handle_log
 
 Handle an incoming log packet.
 
@@ -507,13 +532,33 @@ sub handle_log {
 	substr $$pkt, 0, $self->{log_record_length}, '';
 }
 
+=head2 data_hashref
+
+Convert logline data to a hashref.
+
+=cut
+
+sub data_hashref {
+	my $self = shift;
+	my $data = shift;
+	my %info = %$data;
+
+	$info{$_} = $self->from_cache($_, $info{$_}) for qw(vhost user url query useragent refer);
+	$info{server} = $self->{server};
+	undef $info{$_} for grep { $info{$_} eq '-' } qw(user refer size useragent);
+	undef $info{query} unless defined $info{query} && length $info{query};
+#DateTime->from_epoch(epoch => $self->{timestamp})->strftime("%d/%b/%Y:%H:%M:%S %z");
+	$info{timestamp} = strftime("%d/%b/%Y:%H:%M:%S %z", gmtime($self->{timestamp}));
+	return \%info;
+}
+
 sub data_to_text {
 	my $self = shift;
 	my $data = shift;
 	my $q = $self->from_cache('query', $data->{query});
 	$q = '' unless defined $q;
 	return join(' ',
-		$self->from_cache('host', $data->{host}),
+		$self->from_cache('vhost', $data->{vhost}),
 		$data->{duration},
 		$data->{ip},
 		'-',
@@ -533,6 +578,7 @@ sub handle_server {
 	return unless index($$pkt, "\0", 1) >= 0;
 	my ($type, $hostname) = unpack('C1Z*', $$pkt);
 	substr $$pkt, 0, 2 + length($hostname), '';
+	$self->{server} = $hostname;
 }
 
 sub handle_timestamp {
@@ -546,9 +592,22 @@ sub handle_timestamp {
 	$self;
 }
 
+sub invoke_event {
+	my $self = shift;
+	my $event = shift;
+	my $code = $self->{"on_" . $event} || $self->can("on_" . $event) or return;
+	return $code->(@_);
+}
+
+=head1 C<stats>
+
+Print current stats - not all that useful since we clear cached values regularly.
+
+=cut
+
 sub stats {
 	my $self = shift;
-	printf("%-64.64s had max index %s\n", $_, $#{$self->{entry_index}->{$_}}) for sort keys %{$self->{entry_index}};
+	printf("%-64.64s saw total entries: %s\n", $_, $self->{entry_count}->{$_}) for sort keys %{$self->{entry_index}};
 }
 
 1;

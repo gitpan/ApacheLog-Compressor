@@ -6,7 +6,9 @@ Makefile.PL
 README
 dist.ini
 examples/compress.pl
+examples/expand.pl
 lib/ApacheLog/Compressor.pm
 t/00-pod.t
 t/00-use.t
 t/compress.t
+t/unicode.t

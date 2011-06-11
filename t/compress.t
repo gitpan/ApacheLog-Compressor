@@ -1,7 +1,7 @@
 use strict;
 use warnings;
 
-use Test::More tests => 26;
+use Test::More tests => 29;
 use ApacheLog::Compressor;
 
 sub is_hex($$;$) {
@@ -50,3 +50,12 @@ is(length($buffer), 0, 'buffer now empty');
 my $idx = 0;
 $exp->expand(\$copy) while length $copy && ++$idx < 100;
 
+{
+	my $bad_data = 'api.example.com 105327 123.15.16.108 - apiuser@example.com [19/Dec/2009:03:12:07 +0000] "SOME INVALID DATA HERE" 14124 1231 -';
+	local $comp->{on_bad_data} = sub {
+		my $data = shift;
+		pass('have bad data event');
+		is($data, $bad_data, 'data matches');
+	};
+	ok($comp->compress($bad_data), 'pass bad data into compressor');
+}

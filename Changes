@@ -1,3 +1,8 @@
+0.004     2011-06-11 17:31:35 Europe/London
+	Provide on_bad_data_event so that unparsable lines can be handled separately.
+	Includes some extra code for parsing data as UTF8, including unescaping URLS - currently commented out since
+	 in most cases it's either not useful, or just wrong.
+
 0.003     2011-02-20 18:20:53 Europe/London
 	Improve filtering support, basic callbacks for things that need to know when new URL packets etc. are seen,
 	 and apply post processing before sending the log line event.
