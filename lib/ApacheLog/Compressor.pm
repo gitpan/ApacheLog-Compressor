@@ -12,7 +12,7 @@ use DateTime;
 use Encode qw(encode_utf8 decode_utf8 FB_DEFAULT is_utf8 FB_CROAK);
 use POSIX qw{strftime};
 
-our $VERSION = '0.004';
+our $VERSION = '0.005';
 
 =head1 NAME
 
@@ -20,7 +20,7 @@ ApacheLog::Compressor - convert Apache / CLF log files into a binary format for 
 
 =head1 VERSION
 
-version 0.004
+version 0.005
 
 =head1 SYNOPSIS
 
@@ -129,18 +129,27 @@ The log entry itself normally consists of the following fields:
  N bytes
  N url
 
-Format entries consist of the following keys:
+The format of the log file can be customised, see the next section for details.
+
+=head3 FORMAT SPECIFICATION
+
+A custom format can be provided as the C<format> parameter when instantiating
+a new L<ApacheLog::Compressor> object via ->L</new>. This format consists of an
+arrayref of key/value pairs, each value holding the following information:
 
 =over 4
 
 =item * id - the ID to use when sending packets
 
-=item * type - data type to use with pack/unpack, without this there will be no entry for the item in the
-compressed log stream
+=item * type - L<pack> format specifier used when storing and retrieving the data, such as N1 or n1. Without this there will be no entry for the item in the compressed log stream
 
-=item * process_in - coderef to call for processing output data for generating output packets
+=item * regex - the regular expression used for matching this part of the log file. The
+final regex will be the concatenation of all regex entries for the format, joined
+using \s+ as the delimiter.
 
-=item * regex - the regex to match in the incoming log string
+=item * process_in - coderef for converting incoming values from a plain text log source into compressed values, will receive $self (the current L<ApacheLog::Compressor> instance) and $data (the current hashref containing the raw data).
+
+=item * process_out - coderef for converting values from a compressed source back to plain text, will receive $self (the current L<ApacheLog::Compressor> instance) and $data (the current hashref containing the raw data).
 
 =back
 
@@ -168,10 +177,11 @@ Takes the following named parameters:
 
 =cut
 
+
 sub new {
 	my $class = shift;
 	my %args = @_;
-	my $format = delete $args{format} || {};
+	my $format = delete $args{format};
 	my $self = bless {
 		%args,
 		entry_index	=> {},
@@ -179,37 +189,72 @@ sub new {
 		log_packet_count => 0,
 		timestamp	=> undef,
 		server		=> undef,
-		format		=> [
-			type		=> { type => 'C1' },
-			vhost		=> { id => 0x03, type => 'n1', regex => qr{([^ ]+)} },
-			duration	=> { type => 'N1', regex => qr{(\d+)} },
-			ip		=> { type => 'N1', regex => qr{(\S+)\s+\S+}, process_in => sub {
+	}, $class;
+	$self->{format} = $format || $self->default_format;
+	$self->update_mapping;
+	return $self;
+}
+
+=head2 default_format
+
+Returns the default format used for parsing log lines.
+
+This is an arrayref containing key => value pairs, see L</FORMAT SPECIFICATION> for
+more details.
+
+=cut
+
+sub default_format {
+	my $self = shift;
+	return [
+		type		=> { type => 'C1' },
+		vhost		=> { id => 0x03, type => 'n1', regex => qr{([^ ]+)} },
+		duration	=> { type => 'N1', regex => qr{(\d+)} },
+		ip		=> {
+			type => 'N1',
+			regex => qr{(\S+)\s+\S+},
+			process_in => sub {
 				my ($self, $data) = @_;
 				$data->{ip} = unpack('N1', inet_aton($data->{ip}));
-			}, process_out => sub {
+			},
+			process_out => sub {
 				my ($self, $data) = @_;
 				$data->{ip} = inet_ntoa(pack('N1', $data->{ip}));
-			} },
-			user		=> { id => 0x04, type => 'n1', regex => qr{(\S+)} },
-			timestamp	=> { id => 0x02, regex => qr{\[([^\]]+)\]}, process_in => sub {
+			}
+		},
+		user		=> { id => 0x04, type => 'n1', regex => qr{(\S+)} },
+		timestamp	=> {
+			id => 0x02,
+			regex => qr{\[([^\]]+)\]},
+			process_in => sub {
 				my ($self, $data) = @_;
 				$data->{timestamp} = str2time($data->{timestamp});
-			} },
-			method		=> { type => 'C1', regex => qr{"([^ ]+)}, process_in => sub {
+			}
+		},
+		method		=> {
+			type => 'C1',
+			regex => qr{"([^ ]+)},
+			process_in => sub {
 				my ($self, $data) = @_;
 				$data->{method} = $HTTP_METHOD{$data->{method}};
-			}, process_out => sub {
+			},
+			process_out => sub {
 				my ($self, $data) = @_;
 				$data->{method} = $HTTP_METHOD_LIST[$data->{method}];
-			} },
-			url		=> { id => 0x07, type => 'N1', regex => qr{([^ ]+)}, process_in => sub {
+			}
+		},
+		url		=> {
+			id => 0x07,
+			type => 'N1',
+			regex => qr{([^ ]+)},
+			process_in => sub {
 				my ($self, $data) = @_;
 				return $data->{url} = '' unless defined $data->{url};
 
 				($data->{url}, $data->{query}) = split /\?/, $data->{url}, 2;
-# Dodgy UTF8 handling, currently disabled
+# Dodgy UTF8 handling, currently disabled - no guarantee that URLs are UTF8 anyway
 #				if(length $data->{url}) {
-					# URI::Escape's uri_unescape but in byte mode so we can check utf8 decoding manually
+				# URI::Escape's uri_unescape but in byte mode so we can check utf8 decoding manually
 #					my $txt = $data->{url};
 #					$txt = encode_utf8($txt); # turn OFF utf8
 #					$txt =~ s/%([0-9A-Fa-f]{2})/pack("C1", hex($1))/ge; # expand
@@ -217,34 +262,39 @@ sub new {
 #					$data->{url} = $txt;
 #				}
 #				if(defined $data->{query} && length $data->{query}) {
-					# URI::Escape's uri_unescape but in byte mode so we can check utf8 decoding manually
+				# URI::Escape's uri_unescape but in byte mode so we can check utf8 decoding manually
 #					(my $txt = $data->{query}) =~ s/%([0-9A-Fa-f]{2})/pack("C1", hex($1))/eg;
 #					$data->{query} = decode_utf8($txt, FB_DEFAULT);
 #				}
-			} },
-			query		=> { id => 0x0A, type => 'N1', },
-			ver		=> { type => 'C1', regex => qr{HTTP/(\d+\.\d+)"}, process_in => sub {
+			}
+		},
+		query		=> { id => 0x0A, type => 'N1', },
+		ver		=> {
+			type => 'C1',
+			regex => qr{HTTP/(\d+\.\d+)"},
+			process_in => sub {
 				my ($self, $data) = @_;
 				$data->{ver} = ($data->{ver} eq '1.0' ? 0 : 1);
 			}, process_out => sub {
 				my ($self, $data) = @_;
 				$data->{ver} = ($data->{ver} ? '1.1' : '1.0');
-			} },
-			result		=> { type => 'n1', regex => qr{(\d+)} },
-			size		=> { type => 'N1', regex => qr{(\d+|-)}, process_in => sub {
+			}
+		},
+		result		=> { type => 'n1', regex => qr{(\d+)} },
+		size		=> {
+			type => 'N1',
+			regex => qr{(\d+|-)},
+			process_in => sub {
 				my ($self, $data) = @_;
 				$data->{size} = ($data->{size} eq '-') ? -1 : $data->{size};
 			}, process_out => sub {
 				my ($self, $data) = @_;
 				$data->{size} = ($data->{size} == 4294967295) ? '-' : $data->{size};
-			} },
-			refer		=> { id => 0x06, type => 'n1', regex => qr{"([^"]*)"} },
-			useragent	=> { id => 0x05, type => 'n1', regex => qr{"([^"]*)"} },
-			%{$args{format} || {}}
-		],
-	}, $class;
-	$self->update_mapping;
-	return $self;
+			}
+		},
+		refer		=> { id => 0x06, type => 'n1', regex => qr{"([^"]*)"} },
+		useragent	=> { id => 0x05, type => 'n1', regex => qr{"([^"]*)"} },
+	];
 }
 
 =head2 update_mapping
@@ -270,7 +320,6 @@ sub update_mapping {
 	my $log_len = 0;
 	my @format_keys;
 	my @regex;
-	my @regex_data;
 	ITEM:
 	while(@fmt) {
 		my $k = shift(@fmt);
@@ -508,7 +557,6 @@ sub handle_reset {
 	# Clear cache for all items
 	$self->{entry_cache} = { };
 	$self->{entry_index} = { };
-	my ($type) = unpack('C1', $$pkt);
 	substr $$pkt, 0, 1, '';
 }
 
@@ -552,6 +600,14 @@ sub data_hashref {
 	return \%info;
 }
 
+=head2 data_to_text
+
+Internal method for converting the current log entry to a text string in
+something approaching the 'standard' Apache log format (almost, but not quite,
+CLF).
+
+=cut
+
 sub data_to_text {
 	my $self = shift;
 	my $data = shift;
@@ -572,25 +628,45 @@ sub data_to_text {
 	);
 }
 
+=head2 handle_server
+
+Internal method for processing a server record (used to indicate the server
+name subsequent records apply to).
+
+=cut
+
 sub handle_server {
 	my $self = shift;
 	my $pkt = shift;
 	return unless index($$pkt, "\0", 1) >= 0;
-	my ($type, $hostname) = unpack('C1Z*', $$pkt);
-	substr $$pkt, 0, 2 + length($hostname), '';
-	$self->{server} = $hostname;
+	(undef, my $server) = unpack('C1Z*', $$pkt);
+	substr $$pkt, 0, 2 + length($server), '';
+	$self->{server} = $server;
+	$self;
 }
+
+=head2 handle_timestamp
+
+Internal method for processing a timestamp entry.
+
+=cut
 
 sub handle_timestamp {
 	my $self = shift;
 	my $pkt = shift;
 	return unless length $$pkt >= 5;
-	my ($type, $hostname) = unpack('C1N1', $$pkt);
+	(undef, my $hostname) = unpack('C1N1', $$pkt);
+	substr $$pkt, 0, 5, '';
 	$self->{timestamp} = $hostname;
 	warn "Zero timestamp?" unless $self->{timestamp};
-	substr $$pkt, 0, 5, '';
 	$self;
 }
+
+=head2 invoke_event
+
+Internal method for invoking an event.
+
+=cut
 
 sub invoke_event {
 	my $self = shift;
@@ -599,7 +675,7 @@ sub invoke_event {
 	return $code->(@_);
 }
 
-=head1 C<stats>
+=head2 stats
 
 Print current stats - not all that useful since we clear cached values regularly.
 

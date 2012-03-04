@@ -2,35 +2,35 @@
 use strict;
 use warnings;
 
-BEGIN { require 5.008; }
+use 5.008;
 
 use ExtUtils::MakeMaker 6.30;
 
 
 
 my %WriteMakefileArgs = (
-  'ABSTRACT' => 'Convert Apache/CLF data to binary format',
-  'AUTHOR' => 'Tom Molesworth <cpan@entitymodel.com>',
-  'BUILD_REQUIRES' => {},
-  'CONFIGURE_REQUIRES' => {
-    'ExtUtils::MakeMaker' => '6.30'
+  "ABSTRACT" => "Convert Apache/CLF data to binary format",
+  "AUTHOR" => "Tom Molesworth <cpan\@entitymodel.com>",
+  "BUILD_REQUIRES" => {},
+  "CONFIGURE_REQUIRES" => {
+    "ExtUtils::MakeMaker" => "6.30"
   },
-  'DISTNAME' => 'ApacheLog-Compressor',
-  'EXE_FILES' => [],
-  'LICENSE' => 'perl',
-  'NAME' => 'ApacheLog::Compressor',
-  'PREREQ_PM' => {
-    'Date::Parse' => '0',
-    'DateTime' => '0',
-    'Encode' => '0',
-    'List::Util' => '0',
-    'Socket' => '0',
-    'URI' => '0',
-    'URI::Escape' => '0'
+  "DISTNAME" => "ApacheLog-Compressor",
+  "EXE_FILES" => [],
+  "LICENSE" => "perl",
+  "NAME" => "ApacheLog::Compressor",
+  "PREREQ_PM" => {
+    "Date::Parse" => 0,
+    "DateTime" => 0,
+    "Encode" => 0,
+    "List::Util" => 0,
+    "Socket" => 0,
+    "URI" => 0,
+    "URI::Escape" => 0
   },
-  'VERSION' => '0.004',
-  'test' => {
-    'TESTS' => 't/*.t'
+  "VERSION" => "0.005",
+  "test" => {
+    "TESTS" => "t/*.t"
   }
 );
 
